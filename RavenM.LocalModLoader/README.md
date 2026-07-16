@@ -11,6 +11,6 @@ A plugin to enable RavenM([CHN Edition](https://github.com/RavenfieldCommunity/R
 # Usage
 Launch the game, then you can press `F1`(default) or `Left alt`+`S` to edit the config.
 
-Press `Left alt`+`O`(default) to open the specific mod folder `gamePath\RemoteMods\`
+Press `Left alt`+`O`(default) to open the specific mod folder `gamePath\RemoteMods\`(default)
 
 During main menu with lobby joined, press `Left alt`+`N`(default) to reload the mods in folder, press `Left alt`+`M` to check the local mod list, including disabled ones as long as they are in the folder.
