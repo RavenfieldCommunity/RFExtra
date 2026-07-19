@@ -95,10 +95,10 @@ public class LocalModLoader : BaseUnityPlugin
                             if (showModfileList.Value)
                                 foreach (var modfileInfo in packInfo.GetFiles())
                                 {
-                                    if (modfileInfo.Extension == "rfc" ||
-                                        modfileInfo.Extension == "rfs" ||
-                                        modfileInfo.Extension == "rfl" ||
-                                        modfileInfo.Extension == "rfld")
+                                    if (modfileInfo.Extension == ".rfc" ||
+                                        modfileInfo.Extension == ".rfs" ||
+                                        modfileInfo.Extension == ".rfl" ||
+                                        modfileInfo.Extension == ".rfld")
                                         modfileList.Add(modfileInfo.Name);
                                 }
                         }
