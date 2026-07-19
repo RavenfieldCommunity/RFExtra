@@ -11,6 +11,7 @@ using System.Diagnostics;
 using BepInEx.Logging;
 using UnityEngine.SceneManagement;
 using Steamworks;
+using System.Collections.Generic;
 
 namespace RavenM.LocalModLoader;
 
@@ -25,13 +26,10 @@ public class LocalModLoader : BaseUnityPlugin
     public ConfigEntry<string> remoteModDirectoryName;
     public ConfigEntry<bool> forceWarningOnLocalModLoader;
     public ConfigEntry<bool> forceHiddenLobby;
-    public ConfigEntry<KeyboardShortcut> openFolderKeybindConfig;
-    public ConfigEntry<KeyboardShortcut> reloadModsKeybindConfig;
-    public ConfigEntry<KeyboardShortcut> modListKeybindConfig;
-
-    public Traverse configurationManagerTraverse;
+    public ConfigEntry<bool> showModfileList;
     public ConfigEntry<KeyboardShortcut> configUIKeybindConfig;
     public bool allowReloadMods = false;
+    public Traverse _configurationManagerTraverse;
     public const string HASH_LOBBYDATA_MODSIZE_LOCALMODS = "LocalMods";
     public const string HASH_MODLIST_FILENAME = "ravenm_modlist.txt";
     private void Start()
@@ -50,18 +48,10 @@ public class LocalModLoader : BaseUnityPlugin
             "Force Hidden Lobby",
             true,
             "Whether hide the created lobby when LocalModLoader enabled");
-        openFolderKeybindConfig = Config.Bind("Config",
-            "Open Mod Folder Keybind",
-            new KeyboardShortcut(KeyCode.O, [KeyCode.LeftAlt]),
-            "");
-        reloadModsKeybindConfig = Config.Bind("Config",
-            "Reload Mods Keybind",
-            new KeyboardShortcut(KeyCode.N, [KeyCode.LeftAlt]),
-            "");
-        modListKeybindConfig = Config.Bind("Config",
-            "Mod List Action Keybind",
-            new KeyboardShortcut(KeyCode.M, [KeyCode.LeftAlt]),
-            "");
+        showModfileList = Config.Bind<bool>("Config",
+            "Show Modfile List",
+            true,
+            "Whether show the list of mod file whlie showing modpack list");
         var textInstance = Traverse.Create(RavenM.Plugin.instance).Field("pluginNotificationText");
         if (forceWarningOnLocalModLoader.Value)
         {
@@ -76,47 +66,71 @@ public class LocalModLoader : BaseUnityPlugin
         }
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
-        configurationManagerTraverse = Traverse.Create(FindAnyObjectByType<ConfigurationManager.ConfigurationManager>(FindObjectsInactive.Include));
-        configUIKeybindConfig = configurationManagerTraverse.Field("_keybind").GetValue<ConfigEntry<KeyboardShortcut>>();
+        _configurationManagerTraverse = Traverse.Create(
+            FindAnyObjectByType<ConfigurationManager.ConfigurationManager>(FindObjectsInactive.Include));
+        configUIKeybindConfig = _configurationManagerTraverse.Field("_keybind")
+            .GetValue<ConfigEntry<KeyboardShortcut>>();
+        Config.Bind<bool>("UI", "UI", true,
+            new ConfigDescription("", null, new ConfigurationManagerAttributes()
+            {
+                CustomDrawer = (obj) =>
+                {
+                    GUILayout.EndVertical();
+                    if (GUILayout.Button("Open Mod Folder"))
+                        Process.Start(ModManager.instance.modStagingPathOverride);
+                    else if (GUILayout.Button("Open Mod List"))
+                    {
+                        ChatManager.instance.PushLobbyChatMessage("Open local mod list");
+                        var modlistFilePath = Paths.GameRootPath + "\\" + HASH_MODLIST_FILENAME;
+                        if (File.Exists(modlistFilePath))
+                            File.Delete(modlistFilePath);
+                        var writer = File.CreateText(modlistFilePath);
+                        var directories = Directory.GetDirectories(ModManager.instance.modStagingPathOverride);
+                        writer.WriteLine($"LOCAL MODPACK LIST({directories.Length} in total):");
+                        List<string> modfileList = [];
+                        foreach (var modpackDirectory in directories)
+                        {
+                            var packInfo = new DirectoryInfo(modpackDirectory);
+                            writer.WriteLine(packInfo.Name);
+                            if (showModfileList.Value)
+                                foreach (var modfileInfo in packInfo.GetFiles())
+                                {
+                                    if (modfileInfo.Extension == "rfc" ||
+                                        modfileInfo.Extension == "rfs" ||
+                                        modfileInfo.Extension == "rfl" ||
+                                        modfileInfo.Extension == "rfld")
+                                        modfileList.Add(modfileInfo.Name);
+                                }
+                        }
+                        if (showModfileList.Value)
+                        {
+                            modfileList.Sort();
+                            writer.WriteLine($"######\nLOCAL MODFILE LIST({modfileList.Count} in total):");
+                            foreach (var modfileName in modfileList)
+                                writer.WriteLine(modfileName);
+                        }
+                        writer.Close();
+                        Process.Start(modlistFilePath);
+                    }
+                    else if (GUILayout.Button("Reload Mods"))
+                    {
+                        if (ModManager.instance.contentHasFinishedLoading)
+                        {
+                            ChatManager.instance.PushLobbyChatMessage("Reload mods");
+                            ModManager.instance.ReloadMods();
+                        }
+                        else
+                            ChatManager.instance.PushLobbyChatMessage("Reloading mods is not allowed while loading mods");
+                    }
+                    GUILayout.BeginVertical();
+                }
+            }));
     }
-    private void Update()
-    {
-        if (openFolderKeybindConfig.Value.IsDown())
-        {
-            logger.LogDebug("Pressed open folder");
-            Process.Start(ModManager.instance.modStagingPathOverride);
-        }
-        else if (LobbySystem.instance.InLobby)
-        {
-            if (reloadModsKeybindConfig.Value.IsDown())
-            {
-                if (ModManager.instance.contentHasFinishedLoading)
-                {
-                    ChatManager.instance.PushLobbyChatMessage("Reload mods");
-                    ModManager.instance.ReloadMods();
-                }
-                else
-                    ChatManager.instance.PushLobbyChatMessage("Reloading mods is not allowed while loading mods");
-            }
-            else if (modListKeybindConfig.Value.IsDown())
-            {
-                ChatManager.instance.PushLobbyChatMessage("Open local mod list");
-                var modlistFilePath = Paths.GameRootPath + "\\" + HASH_MODLIST_FILENAME;
-                if (File.Exists(modlistFilePath))
-                    File.Delete(modlistFilePath);
-                var writer = File.CreateText(modlistFilePath);
-                var directories = Directory.GetDirectories(ModManager.instance.modStagingPathOverride);
-                writer.WriteLine($"LOCAL MOD LIST({directories.Length} in total):");
-                foreach (var modDirectory in directories)
-                {
-                    var info = new DirectoryInfo(modDirectory);
-                    writer.WriteLine(info.Name);
-                }
-                writer.Close();
-                Process.Start(modlistFilePath);
-            }
-        }
 
+    // the most foolish thingy i have ever done for ConfigurationManager
+    class ConfigurationManagerAttributes
+    {
+        public Action<object> CustomDrawer;
     }
 }
 
@@ -152,30 +166,27 @@ public static class Patch
             LobbySystem.instance.SetLobbyDataDedup("modtotalsize", LocalModLoader.HASH_LOBBYDATA_MODSIZE_LOCALMODS);
             if (LocalModLoader.instance.forceHiddenLobby.Value)
             {
-                SteamMatchmaking.SetLobbyType(LobbySystem.instance.ActualLobbyID, ELobbyType.k_ELobbyTypeFriendsOnly);
+                SteamMatchmaking.SetLobbyType(
+                    LobbySystem.instance.ActualLobbyID, ELobbyType.k_ELobbyTypeFriendsOnly);
                 ChatManager.instance.PushLobbyChatMessage("Steam friends only");
             }
         }
-        ChatManager.instance.PushLobbyChatMessage($"Your are using the LocalModLoader, check config for configs by pressing `{LocalModLoader.instance.configUIKeybindConfig.Value}`");
-        if (LobbySystem.instance.IsLobbyOwner)
-        {
-            ChatManager.instance.PushLobbyChatMessage($"Press `{LocalModLoader.instance.modListKeybindConfig.Value}` export local mod list for the client's check");
-            ChatManager.instance.PushLobbyChatMessage($"Press `{LocalModLoader.instance.reloadModsKeybindConfig.Value}` to reload mod");
-        }
-        else
-        {
-            ChatManager.instance.PushLobbyChatMessage($"Press `{LocalModLoader.instance.modListKeybindConfig.Value}` to check local mod list");
-            ChatManager.instance.PushLobbyChatMessage($"Once you are sure you have installed all mods requested by thee host, press `{LocalModLoader.instance.reloadModsKeybindConfig.Value}` to load mods for game");
-        }
+        ChatManager.instance.PushLobbyChatMessage(
+            $"Your are using the LocalModLoader, check more by pressing `{LocalModLoader.instance.configUIKeybindConfig.Value}`");
         if (LobbySystem.instance.ModsToDownload.Count == 0)
+        {
+            ChatManager.instance.PushLobbyChatMessage("Reload mods");
             ModManager.instance.ReloadMods();
+        }
     }
 
     [HarmonyPatch(typeof(ModManager), nameof(ModManager.ReloadModContent))]
     [HarmonyPrefix]
     public static bool ModManager_ReloadModContent()
     {
-        if (LobbySystem.instance != null && LobbySystem.instance.InLobby && !LocalModLoader.instance.allowReloadMods)
+        if (LobbySystem.instance != null &&
+            LobbySystem.instance.InLobby &&
+            !LocalModLoader.instance.allowReloadMods)
             return false;
         else
             return true;
