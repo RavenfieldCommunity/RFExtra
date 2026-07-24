@@ -35,10 +35,10 @@ public class TDFDView : BaseUnityPlugin
         spectatorOrthographizationKeybind = Config.Bind("Config",
             "Orthographic Spectator Keybind",
             new KeyboardShortcut(KeyCode.F7),
-            "");
+            "`w` and `s` to adjust camera depth, `a/d/q/e` to move, `L` to fix camera rotation, `scroll` to adjust move speed, `mouse middle` to enable smooth movement");
         spectatorOrthographicMultiplier = Config.Bind("Config",
             "Orthographic Spectator Multiplier",
-            1f, "");
+            1f, "The speed of changing orthographic camera fov speed, using `ctrl` + `scroll`");
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
     }
@@ -48,7 +48,8 @@ public class TDFDView : BaseUnityPlugin
         if (SpectatorCamera.instance != null)
         {
             if (spectatorOrthographizationKeybind.Value.IsDown())
-                SpectatorCamera.instance.camera.orthographic = !SpectatorCamera.instance.camera.orthographic;
+                SpectatorCamera.instance.camera.orthographic = 
+                    !SpectatorCamera.instance.camera.orthographic;
             SpectatorCamera.instance.camera.orthographicSize = (int)(SpectatorCamera.instance.camera.fieldOfView * spectatorOrthographicMultiplier.Value);
         }
     }
@@ -63,9 +64,10 @@ public class TDFDView : BaseUnityPlugin
     {
         if (tdfdGameObject == null)
         {
-            tdfdGameObject = GameObject.Instantiate(
-                assetBundle.LoadAsset(assetBundle.GetAllAssetNames()[0])) as GameObject;
-            tdfdCameraGameObject = tdfdCameraGameObject.GetComponentInChildren<Camera>().transform.parent.gameObject;
+            tdfdGameObject = Instantiate(
+                assetBundle.LoadAsset(assetBundle.GetAllAssetNames()[0]) as GameObject);
+            tdfdCameraGameObject = Instantiate(
+                tdfdGameObject.GetComponent<TDFDViewClient>().cameraGameObject);
         }
         tdfdCameraGameObject.transform.SetParent(
             FpsActorController.instance.actor.transform);
@@ -82,6 +84,8 @@ public class TDFDViewClient : MonoBehaviour
 [HarmonyPatch]
 public static class Patch
 {
+    public static GameObject SpectatorCamera_cameraParent;
+
     [HarmonyPatch(typeof(FpsActorController), nameof(FpsActorController.SpawnAt))]
     [HarmonyPostfix]
     public static void FpsActorController_SpawnAt()
@@ -96,5 +100,14 @@ public static class Patch
         if (FpsActorController.instance != null
             && FpsActorController.instance.actor == __instance)
             TDFDView.instance.Event_OnPlayerDied(__instance);
+    }
+
+    [HarmonyPatch(typeof(SpectatorCamera), "Start")]
+    [HarmonyPostfix]
+    public static void SpectatorCamera_Start(SpectatorCamera __instance)
+    {
+        var traverse = Traverse.Create(__instance);
+        SpectatorCamera_cameraParent = traverse.Field("cameraParent").GetValue<GameObject>();
+        traverse.Field("fullLock").SetValue(true);
     }
 }
