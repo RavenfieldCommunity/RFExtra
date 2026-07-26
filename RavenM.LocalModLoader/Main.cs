@@ -23,9 +23,9 @@ public class LocalModLoader : BaseUnityPlugin
     public static LocalModLoader instance;
     public static ManualLogSource logger;
     public Harmony harmonyInstance;
-    public ConfigEntry<string> remoteModDirectoryName;
+    public ConfigEntry<string> remoteModDirectory;
     public ConfigEntry<bool> forceWarningOnLocalModLoader;
-    public ConfigEntry<bool> forceHiddenLobby;
+    public ConfigEntry<bool> forceFriendOnlyLobby;
     public ConfigEntry<bool> showModfileList;
     public ConfigEntry<KeyboardShortcut> configUIKeybindConfig;
     public bool allowReloadMods = false;
@@ -36,17 +36,19 @@ public class LocalModLoader : BaseUnityPlugin
     {
         instance = this;
         logger = Logger;
-        remoteModDirectoryName = Config.Bind<string>("Config",
-            "Remote Mod Directory Name",
+        remoteModDirectory = Config.Bind<string>("Config",
+            "Remote Mod Directory",
             "RemoteMods",
-            "The folder name to contain mods that using on RavenM lobby, appears on game root path and mod items should be put on each single sub folder");
+            "The folder to contain mods that using on RavenM lobby, appears on game root path and mod items should be put on each single sub folder."
+                + " Default is the folder in the game path, if the directory is not a absolute path."
+                + " Applied after relaunching game.");
         forceWarningOnLocalModLoader = Config.Bind<bool>("Config",
             "Force Warning On LocalModLoader",
             true,
             "Whether pop on a obvious warning when this plugin is enabled");
-        forceHiddenLobby = Config.Bind<bool>("Config",
-            "Force Hidden Lobby",
-            true,
+        forceFriendOnlyLobby = Config.Bind<bool>("Config",
+            "Force Friend-only Lobby",
+            false,
             "Whether hide the created lobby when LocalModLoader enabled");
         showModfileList = Config.Bind<bool>("Config",
             "Show Modfile List",
@@ -76,8 +78,10 @@ public class LocalModLoader : BaseUnityPlugin
                 CustomDrawer = (obj) =>
                 {
                     GUILayout.EndVertical();
-                    if (GUILayout.Button("Open Mod Folder"))
+                    if (GUILayout.Button("Open Current Mod Folder"))
                         Process.Start(ModManager.instance.modStagingPathOverride);
+                    else if (GUILayout.Button("Open Configured Mod Folder"))
+                        Process.Start(remoteModDirectory.Value);
                     else if (GUILayout.Button("Open Mod List"))
                     {
                         ChatManager.instance.PushLobbyChatMessage("Open local mod list");
@@ -141,11 +145,39 @@ public static class Patch
     [HarmonyPostfix]
     public static void NoCustommodsPatch_OnGameManagerStart()
     {
-        ModManager.instance.modStagingPathOverride = Paths.GameRootPath +
-          "\\" +
-          LocalModLoader.instance.remoteModDirectoryName.Value;
+        var hasGotoOnce = false;
+        pathProcesser:
+        if (LocalModLoader.instance.remoteModDirectory.Value.Contains(":")
+            || LocalModLoader.instance.remoteModDirectory.Value.Contains("\\")
+            || LocalModLoader.instance.remoteModDirectory.Value.Contains("/"))
+        {
+            ModManager.instance.modStagingPathOverride = LocalModLoader.instance.remoteModDirectory.Value;
+        }
+        else
+        {
+            ModManager.instance.modStagingPathOverride = Paths.GameRootPath
+                + "\\"
+                + LocalModLoader.instance.remoteModDirectory.Value;
+        }
+
         if (!Directory.Exists(ModManager.instance.modStagingPathOverride))
-            Directory.CreateDirectory(ModManager.instance.modStagingPathOverride);
+        {
+            try
+            {
+                Directory.CreateDirectory(ModManager.instance.modStagingPathOverride);
+            }
+            catch (Exception exception)
+            {
+                LocalModLoader.logger.LogError(exception);
+                Traverse.Create(RavenM.Plugin.instance).Field("pluginNotificationText")
+                    .SetValue("Invaild remote mod path, resetted.");
+                hasGotoOnce = true;
+                LocalModLoader.instance.remoteModDirectory.Value = 
+                    LocalModLoader.instance.remoteModDirectory.DefaultValue as string;
+                if(!hasGotoOnce)
+                    goto pathProcesser;
+            }
+        }
     }
 
     [HarmonyPatch(typeof(LobbySystem), "OnLobbyEnter")]
@@ -164,7 +196,7 @@ public static class Patch
         if (LobbySystem.instance.InLobby && LobbySystem.instance.IsLobbyOwner)
         {
             LobbySystem.instance.SetLobbyDataDedup("modtotalsize", LocalModLoader.HASH_LOBBYDATA_MODSIZE_LOCALMODS);
-            if (LocalModLoader.instance.forceHiddenLobby.Value)
+            if (LocalModLoader.instance.forceFriendOnlyLobby.Value)
             {
                 SteamMatchmaking.SetLobbyType(
                     LobbySystem.instance.ActualLobbyID, ELobbyType.k_ELobbyTypeFriendsOnly);

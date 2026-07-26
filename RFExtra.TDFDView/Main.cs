@@ -1,12 +1,9 @@
 ﻿using System.Diagnostics;
 using System.Reflection;
-using System.Threading.Tasks;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
-using Ravenfield.Trigger;
 using UnityEngine;
-using UnityEngine.PlayerLoop;
 
 namespace RFExtra.TDFDView;
 
@@ -16,18 +13,18 @@ public class TDFDView : BaseUnityPlugin
     public static TDFDView instance;
     public Harmony harmonyInstance;
     public ConfigEntry<KeyboardShortcut> spectatorOrthographizationKeybind;
-    public ConfigEntry<float> spectatorOrthographicMultiplier;
+    public ConfigEntry<float> spectatorOrthographicAdjustingSpeed;
     private float _previousCameraFOV = 60;
     private void Awake()
     {
         instance = this;
         spectatorOrthographizationKeybind = Config.Bind("Config",
             "Orthographic Spectator Keybind",
-            new KeyboardShortcut(KeyCode.F9),
-            "`q/e` to adjust camera depth, `w/a/s/d` to move, `L` to fix camera rotation, `scroll` to adjust move speed, `mouse middle` to enable smooth movement");
-        spectatorOrthographicMultiplier = Config.Bind("Config",
-            "Orthographic Spectator Multiplier",
-            1f, "The speed of changing orthographic camera fov speed, using `ctrl` + `scroll`");
+            new KeyboardShortcut(KeyCode.H, [KeyCode.LeftControl]),
+            "`q/e` to adjust camera depth (suitable depth is good for camera rotating), `w/a/s/d` to move, `L` to fix camera rotation, `scroll` to adjust move speed, `mouse middle` to enable smooth movement");
+        spectatorOrthographicAdjustingSpeed = Config.Bind("Config",
+            "Orthographic Spectator Adjusting Speed",
+            15f, "The speed of adjusting orthographic camera fov, using `ctrl` + `scroll`");
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
     }
@@ -45,14 +42,16 @@ public class TDFDView : BaseUnityPlugin
                     _previousCameraFOV = SpectatorCamera.instance.camera.fieldOfView;
                 }
                 else
+                {
+                    var tempFov = SpectatorCamera.instance.camera.fieldOfView;
                     SpectatorCamera.instance.camera.fieldOfView = _previousCameraFOV;
+                    _previousCameraFOV = tempFov;
+                }
             }
             if (SpectatorCamera.instance.camera.orthographic)
-                SpectatorCamera.instance.camera.orthographicSize = 
-                    (int)(SpectatorCamera.instance.camera.fieldOfView 
-                    * spectatorOrthographicMultiplier.Value);
-            //Traverse.Create(SpectatorCamera.instance).Field("velocity").SetValue(Vector3.zero);
-            //Patch.SpectatorCamera_velocity.SetValue(Vector3.zero);
+                SpectatorCamera.instance.camera.orthographicSize =
+                    (int)(SpectatorCamera.instance.camera.fieldOfView
+                    * spectatorOrthographicAdjustingSpeed.Value);
         }
     }
 }
@@ -74,20 +73,22 @@ public static class Patch
 
     [HarmonyPatch(typeof(SteelInput), nameof(SteelInput.GetAxis))]
     [HarmonyPrefix]
-    public static void SteelInput_GetAxis(ref SteelInput.KeyBinds input)
+    public static bool SteelInput_GetAxis(ref SteelInput.KeyBinds input, ref float __result)
     {
         if (SpectatorCamera.instance == null
             || !SpectatorCamera.instance.gameObject.activeSelf
             || !SpectatorCamera.instance.camera.orthographic)
-            return;
+            return true;
         switch (input)
         {
             case SteelInput.KeyBinds.Vertical:
                 input = SteelInput.KeyBinds.Lean;
                 break;
             case SteelInput.KeyBinds.Lean:
-                input = SteelInput.KeyBinds.Vertical;
-                break;
+                //input = SteelInput.KeyBinds.Vertical;
+                __result = - SteelInput.GetInput(SteelInput.KeyBinds.Vertical).GetValue();
+                return false;
         }
+        return true;
     }
 }
