@@ -13,24 +13,10 @@ public class TDFDView : BaseUnityPlugin
 {
     public static TDFDView instance;
     public Harmony harmonyInstance;
-    public AssetBundle assetBundle;
-    public GameObject tdfdGameObject;
-    public GameObject tdfdCameraGameObject;
     public ConfigEntry<KeyboardShortcut> spectatorOrthographizationKeybind;
     public ConfigEntry<float> spectatorOrthographicMultiplier;
     private void Awake()
     {
-        var assembly = Assembly.GetExecutingAssembly();
-        Task.Run(() =>
-            {
-                var assetLoader = AssetBundle.LoadFromStreamAsync(
-                    assembly.GetManifestResourceStream(assembly.GetManifestResourceNames()[0]));
-                assetLoader.completed += (AsyncOperation asyncOperation) =>
-                    {
-                        assetBundle = assetLoader.assetBundle;
-                        Logger.LogDebug(assetBundle.GetAllAssetNames()[0]);
-                    };
-            });
         instance = this;
         spectatorOrthographizationKeybind = Config.Bind("Config",
             "Orthographic Spectator Keybind",
@@ -48,59 +34,19 @@ public class TDFDView : BaseUnityPlugin
         if (SpectatorCamera.instance != null)
         {
             if (spectatorOrthographizationKeybind.Value.IsDown())
-                SpectatorCamera.instance.camera.orthographic = 
+                SpectatorCamera.instance.camera.orthographic =
                     !SpectatorCamera.instance.camera.orthographic;
             SpectatorCamera.instance.camera.orthographicSize = (int)(SpectatorCamera.instance.camera.fieldOfView * spectatorOrthographicMultiplier.Value);
+            Patch
         }
     }
-
-    public void Event_OnPlayerDied(Actor actor)
-    {
-        if (tdfdGameObject != null)
-            tdfdCameraGameObject.transform.SetParent(null);
-    }
-
-    public void Event_OnPlayerSpawn()
-    {
-        if (tdfdGameObject == null)
-        {
-            tdfdGameObject = Instantiate(
-                assetBundle.LoadAsset(assetBundle.GetAllAssetNames()[0]) as GameObject);
-            tdfdCameraGameObject = Instantiate(
-                tdfdGameObject.GetComponent<TDFDViewClient>().cameraGameObject);
-        }
-        tdfdCameraGameObject.transform.SetParent(
-            FpsActorController.instance.actor.transform);
-        tdfdCameraGameObject.transform.localPosition = Vector3.zero;
-    }
-}
-
-public class TDFDViewClient : MonoBehaviour
-{
-    public RenderTexture renderTexture;
-    public GameObject cameraGameObject;
 }
 
 [HarmonyPatch]
 public static class Patch
 {
     public static GameObject SpectatorCamera_cameraParent;
-
-    [HarmonyPatch(typeof(FpsActorController), nameof(FpsActorController.SpawnAt))]
-    [HarmonyPostfix]
-    public static void FpsActorController_SpawnAt()
-    {
-        TDFDView.instance.Event_OnPlayerSpawn();
-    }
-
-    [HarmonyPatch(typeof(Actor), "Die")]
-    [HarmonyPostfix]
-    public static void Actor_Die(Actor __instance)
-    {
-        if (FpsActorController.instance != null
-            && FpsActorController.instance.actor == __instance)
-            TDFDView.instance.Event_OnPlayerDied(__instance);
-    }
+    public static Traverse SpectatorCamera_velocity;
 
     [HarmonyPatch(typeof(SpectatorCamera), "Start")]
     [HarmonyPostfix]
@@ -108,6 +54,8 @@ public static class Patch
     {
         var traverse = Traverse.Create(__instance);
         SpectatorCamera_cameraParent = traverse.Field("cameraParent").GetValue<GameObject>();
-        traverse.Field("fullLock").SetValue(true);
+        SpectatorCamera_velocity = traverse.Field("velocity");
+        if (GameManager.instance.gameModeParameters.playerTeam == -1)
+            traverse.Field("fullLock").SetValue(true);
     }
 }

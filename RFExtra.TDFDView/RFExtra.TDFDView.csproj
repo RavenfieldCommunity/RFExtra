@@ -17,8 +17,5 @@
     </PackageReference>
   </ItemGroup>
 
-  <ItemGroup>
-    <EmbeddedResource Include="..\assets\2d5dview"/>
-  </ItemGroup>
 
 </Project>
