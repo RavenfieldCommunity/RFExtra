@@ -22,13 +22,22 @@ public class LocalModLoader : BaseUnityPlugin
 {
     public static LocalModLoader instance;
     public static ManualLogSource logger;
+
+    // var for outside ref 
     public Harmony harmonyInstance;
     public ConfigEntry<string> remoteModDirectory;
     public ConfigEntry<bool> forceWarningOnLocalModLoader;
     public ConfigEntry<bool> forceFriendOnlyLobby;
     public ConfigEntry<bool> showModfileList;
+    /// <summary>
+    /// Hotkey of opening Configuration Manager UI
+    /// </summary>
     public ConfigEntry<KeyboardShortcut> configUIKeybindConfig;
+    /// <summary>
+    /// Allow reloading mod now? when in lobby
+    /// </summary>
     public bool allowReloadMods = false;
+    // runtime var and not for outside ref
     public Traverse _configurationManagerTraverse;
     public const string HASH_LOBBYDATA_MODSIZE_LOCALMODS = "LocalMods";
     public const string HASH_MODLIST_FILENAME = "ravenm_modlist.txt";
@@ -36,6 +45,7 @@ public class LocalModLoader : BaseUnityPlugin
     {
         instance = this;
         logger = Logger;
+        // config
         remoteModDirectory = Config.Bind<string>("Config",
             "Remote Mod Directory",
             "RemoteMods",
@@ -54,6 +64,7 @@ public class LocalModLoader : BaseUnityPlugin
             "Show Modfile List",
             true,
             "Whether show the list of mod file whlie showing modpack list");
+        // setup notification
         var textInstance = Traverse.Create(RavenM.Plugin.instance).Field("pluginNotificationText");
         if (forceWarningOnLocalModLoader.Value)
         {
@@ -66,22 +77,34 @@ public class LocalModLoader : BaseUnityPlugin
             else
                 textInstance.SetValue("LocalModLoader is enabled");
         }
+        // patcher
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
+        // get keybind
         _configurationManagerTraverse = Traverse.Create(
             FindAnyObjectByType<ConfigurationManager.ConfigurationManager>(FindObjectsInactive.Include));
         configUIKeybindConfig = _configurationManagerTraverse.Field("_keybind")
             .GetValue<ConfigEntry<KeyboardShortcut>>();
+        // config ui
         Config.Bind<bool>("UI", "UI", true,
             new ConfigDescription("", null, new ConfigurationManagerAttributes()
             {
                 CustomDrawer = (obj) =>
                 {
                     GUILayout.EndVertical();
+                    // button
                     if (GUILayout.Button("Open Current Mod Folder"))
                         Process.Start(ModManager.instance.modStagingPathOverride);
+                    // button
                     else if (GUILayout.Button("Open Configured Mod Folder"))
                         Process.Start(remoteModDirectory.Value);
+                    // button
+                    else if (GUILayout.Button("Disable No Content Mods mode"))
+                    {
+                        ModManager.instance.noContentMods = false;
+                        ModManager.instance.noWorkshopMods = false;
+                    }
+                    // button
                     else if (GUILayout.Button("Open Mod List"))
                     {
                         ChatManager.instance.PushLobbyChatMessage("Open local mod list");
@@ -116,6 +139,7 @@ public class LocalModLoader : BaseUnityPlugin
                         writer.Close();
                         Process.Start(modlistFilePath);
                     }
+                    // button
                     else if (GUILayout.Button("Reload Mods"))
                     {
                         if (ModManager.instance.contentHasFinishedLoading)
@@ -145,8 +169,11 @@ public static class Patch
     [HarmonyPostfix]
     public static void NoCustommodsPatch_OnGameManagerStart()
     {
+        // have we once used goto jnp?
+        // if yes then dont jnp back again to prevent jnp loop
         var hasGotoOnce = false;
-        pathProcesser:
+        // process input dir
+    pathProcesser:
         if (LocalModLoader.instance.remoteModDirectory.Value.Contains(":")
             || LocalModLoader.instance.remoteModDirectory.Value.Contains("\\")
             || LocalModLoader.instance.remoteModDirectory.Value.Contains("/"))
@@ -160,6 +187,7 @@ public static class Patch
                 + LocalModLoader.instance.remoteModDirectory.Value;
         }
 
+        // create dir
         if (!Directory.Exists(ModManager.instance.modStagingPathOverride))
         {
             try
@@ -172,9 +200,9 @@ public static class Patch
                 Traverse.Create(RavenM.Plugin.instance).Field("pluginNotificationText")
                     .SetValue("Invaild remote mod path, resetted.");
                 hasGotoOnce = true;
-                LocalModLoader.instance.remoteModDirectory.Value = 
+                LocalModLoader.instance.remoteModDirectory.Value =
                     LocalModLoader.instance.remoteModDirectory.DefaultValue as string;
-                if(!hasGotoOnce)
+                if (!hasGotoOnce)
                     goto pathProcesser;
             }
         }
@@ -184,6 +212,7 @@ public static class Patch
     [HarmonyPrefix]
     public static void LobbySystem_OnEnterLobby_Prefix()
     {
+        // prevent loading workshop-only mods
         LocalModLoader.instance.allowReloadMods = false;
     }
 
@@ -191,10 +220,12 @@ public static class Patch
     [HarmonyPostfix]
     public static void LobbySystem_OnEnterLobby_Postfix()
     {
+        // notification
         LocalModLoader.logger.LogDebug("OnEnterLobby Postfix");
         LocalModLoader.instance.allowReloadMods = true;
         if (LobbySystem.instance.InLobby && LobbySystem.instance.IsLobbyOwner)
         {
+            // lobby data 
             LobbySystem.instance.SetLobbyDataDedup("modtotalsize", LocalModLoader.HASH_LOBBYDATA_MODSIZE_LOCALMODS);
             if (LocalModLoader.instance.forceFriendOnlyLobby.Value)
             {
@@ -205,6 +236,7 @@ public static class Patch
         }
         ChatManager.instance.PushLobbyChatMessage(
             $"Your are using the LocalModLoader, check more by pressing `{LocalModLoader.instance.configUIKeybindConfig.Value}`");
+        // maunal reload
         if (LobbySystem.instance.ModsToDownload.Count == 0)
         {
             ChatManager.instance.PushLobbyChatMessage("Reload mods");
@@ -216,6 +248,7 @@ public static class Patch
     [HarmonyPrefix]
     public static bool ModManager_ReloadModContent()
     {
+        // prevent reloading
         if (LobbySystem.instance != null &&
             LobbySystem.instance.InLobby &&
             !LocalModLoader.instance.allowReloadMods)

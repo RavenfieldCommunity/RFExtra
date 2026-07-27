@@ -1,5 +1,5 @@
-﻿using System.Diagnostics;
-using System.Reflection;
+﻿using System;
+using System.Diagnostics;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
@@ -27,6 +27,27 @@ public class TDFDView : BaseUnityPlugin
             15f, "The speed of adjusting orthographic camera fov, using `ctrl` + `scroll`");
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
+        // config ui
+        Config.Bind<bool>("UI", "UI", true,
+            new ConfigDescription("", null, new ConfigurationManagerAttributes()
+            {
+                CustomDrawer = (obj) =>
+                {
+                    GUILayout.EndVertical();
+                    // button
+                    if (GUILayout.Button("Reset Camera position") 
+                        && SpectatorCamera.instance != null)
+                        SpectatorCamera.instance.camera.gameObject.transform.position = 
+                            Vector3.zero;
+                    GUILayout.BeginVertical();
+                }
+            }));
+    }
+
+    // the most foolish thingy i have ever done for ConfigurationManager
+    class ConfigurationManagerAttributes
+    {
+        public Action<object> CustomDrawer;
     }
 
     private void Update()
@@ -86,7 +107,7 @@ public static class Patch
                 break;
             case SteelInput.KeyBinds.Lean:
                 //input = SteelInput.KeyBinds.Vertical;
-                __result = - SteelInput.GetInput(SteelInput.KeyBinds.Vertical).GetValue();
+                __result = -SteelInput.GetInput(SteelInput.KeyBinds.Vertical).GetValue();
                 return false;
         }
         return true;
