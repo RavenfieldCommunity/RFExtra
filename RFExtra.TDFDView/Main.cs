@@ -89,7 +89,7 @@ public static class Patch
         var traverse = Traverse.Create(__instance);
         SpectatorCamera_velocity = traverse.Field("velocity");
         if (GameManager.instance.gameModeParameters.playerTeam == -1)
-            traverse.Field("fullLock").SetValue(true);
+            traverse.Field("fullLock").SetValue(false);
     }
 
     [HarmonyPatch(typeof(SteelInput), nameof(SteelInput.GetAxis))]
