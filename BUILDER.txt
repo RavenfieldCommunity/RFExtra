@@ -1,0 +1,4 @@
+keybind: alt + *
+txt filename: mainnamespace_type.txt
+storage path: persistentDataPath + "/RFExtra/"
+utc time

@@ -13,15 +13,22 @@ public class TDFDView : BaseUnityPlugin
     public static TDFDView instance;
     public Harmony harmonyInstance;
     public ConfigEntry<KeyboardShortcut> spectatorOrthographizationKeybind;
+    public ConfigEntry<KeyboardShortcut> spectatorLockCameraKeybind;
     public ConfigEntry<float> spectatorOrthographicAdjustingSpeed;
     private float _previousCameraFOV = 60;
+    public bool isCameraRotationLocked = false;
+    private Quaternion cameraRotaion;
     private void Awake()
     {
         instance = this;
         spectatorOrthographizationKeybind = Config.Bind("Config",
             "Orthographic Spectator Keybind",
             new KeyboardShortcut(KeyCode.H, [KeyCode.LeftControl]),
-            "`q/e` to adjust camera depth (suitable depth is good for camera rotating), `w/a/s/d` to move, `L` to fix camera rotation, `scroll` to adjust move speed, `mouse middle` to enable smooth movement");
+            "`q/e` to adjust camera depth (suitable depth is good for camera rotating), `w/a/s/d` to move, `L` to fix camera rotation, `scroll` to adjust move speed, `mouse middle` to enable smooth movement(frozen in non-spectator team)");
+        spectatorLockCameraKeybind = Config.Bind("Config",
+            "Orthographic Spectator Keybind",
+            new KeyboardShortcut(KeyCode.J, [KeyCode.LeftControl]),
+            "`q/e` to adjust camera depth (suitable depth is good for camera rotating), `w/a/s/d` to move, `L` to fix camera rotation, `scroll` to adjust move speed, `mouse middle` to enable smooth movement(frozen in non-spectator team)");
         spectatorOrthographicAdjustingSpeed = Config.Bind("Config",
             "Orthographic Spectator Adjusting Speed",
             15f, "The speed of adjusting orthographic camera fov, using `ctrl` + `scroll`");
@@ -35,10 +42,18 @@ public class TDFDView : BaseUnityPlugin
                 {
                     GUILayout.EndVertical();
                     // button
-                    if (GUILayout.Button("Reset Camera position") 
+                    if (GUILayout.Button("Reset camera position")
                         && SpectatorCamera.instance != null)
-                        SpectatorCamera.instance.camera.gameObject.transform.position = 
-                            Vector3.zero;
+                    {
+                        SpectatorCamera.instance.camera.gameObject.transform.position =
+                            new Vector3(1, 1, 1);
+                        SpectatorCamera.instance.camera.orthographic = false;
+                        var tempFov = SpectatorCamera.instance.camera.fieldOfView;
+                        SpectatorCamera.instance.camera.fieldOfView = _previousCameraFOV;
+                        _previousCameraFOV = tempFov;
+                        Traverse.Create(SpectatorCamera.instance).Field("target").SetValue(null);
+                        isCameraRotationLocked = false;
+                    }
                     GUILayout.BeginVertical();
                 }
             }));
@@ -69,10 +84,21 @@ public class TDFDView : BaseUnityPlugin
                     _previousCameraFOV = tempFov;
                 }
             }
+            else if (spectatorLockCameraKeybind.Value.IsDown())
+            {
+                isCameraRotationLocked = !isCameraRotationLocked;
+                if (isCameraRotationLocked)
+                    cameraRotaion = SpectatorCamera.instance.camera.transform.rotation;
+
+            }
             if (SpectatorCamera.instance.camera.orthographic)
+            {
                 SpectatorCamera.instance.camera.orthographicSize =
                     (int)(SpectatorCamera.instance.camera.fieldOfView
                     * spectatorOrthographicAdjustingSpeed.Value);
+                if (isCameraRotationLocked)
+                    SpectatorCamera.instance.camera.transform.rotation = cameraRotaion;
+            }
         }
     }
 }
@@ -90,6 +116,7 @@ public static class Patch
         SpectatorCamera_velocity = traverse.Field("velocity");
         if (GameManager.instance.gameModeParameters.playerTeam == -1)
             traverse.Field("fullLock").SetValue(false);
+        TDFDView.instance.isCameraRotationLocked = false;
     }
 
     [HarmonyPatch(typeof(SteelInput), nameof(SteelInput.GetAxis))]

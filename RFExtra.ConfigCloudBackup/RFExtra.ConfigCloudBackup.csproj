@@ -2,8 +2,8 @@
 
   <PropertyGroup>
     <TargetFramework>net46</TargetFramework>
-    <RootNamespace>RFExtra.TDFDView</RootNamespace>
-    <Version>1.0.2</Version>
+    <RootNamespace>RFExtra.ConfigCloudBackup</RootNamespace>
+    <Version>1.0.0</Version>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
