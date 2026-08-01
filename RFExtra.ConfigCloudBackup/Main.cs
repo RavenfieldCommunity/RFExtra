@@ -10,6 +10,7 @@ using UnityEngine;
 using System.Linq;
 using UnityEngine.XR;
 using BepInEx.Logging;
+using System.Threading.Tasks;
 
 namespace RFExtra.ConfigCloudBackup;
 
@@ -22,21 +23,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
     public Harmony harmonyInstance;
     private string _uiOutputMessage;
     private bool _isActionConfirmed = false;
-    private bool _hasCloudActionRunning = false;
-    private int _totalFileCount = 0;
-    private int _processedFileCount = 0;
-    private bool _isReadORWriteOnceFinished = false;
-    private int _errorFileCount = 0;
-    private NextActionAfterRead _nextActionAfterRead = NextActionAfterRead.Backup;
-    public bool isReadyToUpload = false;
 
-    public enum NextActionAfterRead
-    {
-        Download,
-        Backup,
-        Upload,
-        Delete
-    }
 
     public readonly string HASH_GAME_CONFIG_PATH
         = Path.Combine(Application.platform == RuntimePlatform.WindowsPlayer ?
@@ -50,10 +37,10 @@ public class ConfigCloudBackup : BaseUnityPlugin
     public const string HASH_TIME_FORMAT = "yyyy-MM-dd-HH-mm-ss";
     public const string HASH_LOCAL = "LOCAL";
     public const string HASH_CLOUD = "CLOUD";
-    private CallResult<RemoteStorageFileReadAsyncComplete_t> callResult_Read;
-    private CallResult<RemoteStorageFileWriteAsyncComplete_t> callResult_Write;
+    public const string HASH_OUTPUT_NEEDCOMFIRM = "Action needs comfirm";
     public ConfigEntry<string> lastBackupTime;
     public ConfigEntry<bool> enableAutoUpload;
+    public ConfigEntry<bool> backupBeforeImportantActions;
     public ConfigEntry<bool> enableAutoBackup;
     private void Awake()
     {
@@ -65,7 +52,10 @@ public class ConfigCloudBackup : BaseUnityPlugin
         enableAutoBackup = Config.Bind("Config"
             , "Enable Auto Backup", false
             , "Auto backup local files to local backup directory weekly when launching game");
-        lastBackupTime = Config.Bind("Config"
+        backupBeforeImportantActions = Config.Bind("Config"
+            , "Backup Before Important Actions", true
+            , "Backup files to local backup directory before important actions which need confirm");
+        lastBackupTime = Config.Bind("Cache"
             , "lastBackupTime", ""
             , new ConfigDescription(""
                 , tags: new ConfigurationManagerAttributes() { IsAdvanced = true }));
@@ -77,10 +67,6 @@ public class ConfigCloudBackup : BaseUnityPlugin
                 {
                     GUILayout.EndVertical();
                     GUILayout.Label("TOOL ONLY, ALWAYS BACKUP ON YOUR OWN OCCASIONALLY!!");
-                    GUILayout.Label("Some actions need confirm and will auto backup configs locally first");
-                    GUILayout.Label(_hasCloudActionRunning
-                        ? "Cloud-related action is running"
-                        : "Actions relate to Cloud can only run one during once time");
                     _isActionConfirmed = GUILayout.Toggle(_isActionConfirmed, "CONFIRM ACTION?");
                     GUILayout.TextArea(_uiOutputMessage);
                     // button
@@ -91,16 +77,21 @@ public class ConfigCloudBackup : BaseUnityPlugin
                         if (File.Exists(listFilePath))
                             File.Delete(listFilePath);
                         var writer = File.CreateText(listFilePath);
-                        writer.WriteLine($"CLOUD CONFIG FILE LIST ({SteamRemoteStorage.GetFileCount()} in total):");
+                        int realCount = 0;
                         for (int i = 0; i < SteamRemoteStorage.GetFileCount(); i++)
                         {
                             var configFilename = SteamRemoteStorage
                             .GetFileNameAndSize(i, out var pnFileSizeInBytes);
                             if (SteamRemoteStorage.FilePersisted(configFilename))
+                            {
+                                realCount++;
                                 writer.WriteLine(configFilename + " ~"
                                     + (pnFileSizeInBytes / 1024).ToString("F2")
                                     + "KB");
+                            }
                         }
+                        writer.WriteLine("#####");
+                        writer.WriteLine($"CLOUD CONFIG FILE LIST ({realCount} in total)");
                         writer.Close();
                         Process.Start(listFilePath);
                         OutputMessage("List is got");
@@ -113,29 +104,80 @@ public class ConfigCloudBackup : BaseUnityPlugin
                         Process.Start(Path.Combine(Paths.BepInExRootPath, "LogOutput.log"));
                     else if (GUILayout.Button("BACKUP: Local to Local"))
                         BackupLocal();
-                    else if (GUILayout.Button("BACKUP: Cloud to Local")
-                        && !_hasCloudActionRunning)
-                        BackupCloud(NextActionAfterRead.Backup);
-                    else if (GUILayout.Button("UPLOAD: Local to Cloud")
-                        && !_hasCloudActionRunning)
-                        UploadLocalConfigToCloud();
-                    else if (GUILayout.Button("DOWNLOAD: Cloud to Local")
-                        && !_hasCloudActionRunning)
-                    {
-                        if (!_isActionConfirmed)
+                    else if (GUILayout.Button("BACKUP: Cloud to Local"))
+                        Task.Run(() =>
                         {
-                            OutputMessage("Action needs to be confirmed");
-                            return;
-                        }
-                        _isActionConfirmed = false;
-                        BackupLocal();
-                        _nextActionAfterRead = NextActionAfterRead.Download;
-                        Sub_ReadFileRelayStart();
-                    }
-                    else if (GUILayout.Button("REMOVE: Local exists but not on Cloud")
-                        && !_hasCloudActionRunning)
+                            DownloadFromCloud(isBackup: true);
+                        });
+                    else if (GUILayout.Button("UPLOAD: Local to Cloud"))
+                        Task.Run(() =>
+                        {
+                            if (!_isActionConfirmed)
+                            {
+                                OutputMessage(HASH_OUTPUT_NEEDCOMFIRM);
+                                return;
+                            }
+                            _isActionConfirmed = false;
+                            if (backupBeforeImportantActions.Value)
+                                DownloadFromCloud(isBackup: true);
+                            UploadToCloud();
+                        });
+                    else if (GUILayout.Button("DOWNLOAD: Cloud to Local"))
                     {
-                        BackupCloud(NextActionAfterRead.Delete);
+                        Task.Run(() =>
+                        {
+                            if (!_isActionConfirmed)
+                            {
+                                OutputMessage(HASH_OUTPUT_NEEDCOMFIRM);
+                                return;
+                            }
+                            _isActionConfirmed = false;
+                            if (backupBeforeImportantActions.Value)
+                                BackupLocal();
+                            DownloadFromCloud(isBackup: false);
+                        });
+                    }
+                    else if (GUILayout.Button("REMOVE: Local exists but not on Cloud"))
+                    {
+                        Task.Run(() =>
+                        {
+                            if (!_isActionConfirmed)
+                            {
+                                OutputMessage(HASH_OUTPUT_NEEDCOMFIRM);
+                                return;
+                            }
+                            _isActionConfirmed = false;
+                            if (backupBeforeImportantActions.Value)
+                                DownloadFromCloud(isBackup: true);
+                            var configDirectory = new DirectoryInfo(HASH_GAME_CONFIG_PATH);
+                            for (int i = 0; i < SteamRemoteStorage.GetFileCount(); i++)
+                            {
+                                var cloudFilename = SteamRemoteStorage.GetFileNameAndSize(i, out _);
+                                var isFileExist = false;
+                                foreach (var localConfigFile in configDirectory.GetFiles())
+                                {
+                                    if (SteamRemoteStorage.FilePersisted(cloudFilename)
+                                        && localConfigFile.Name == cloudFilename)
+                                    {
+                                        isFileExist = true;
+                                        break;
+                                    }
+                                }
+                                if (!isFileExist)
+                                {
+                                    Logger.LogInfo("Remove: " + cloudFilename);
+                                    try
+                                    {
+                                        SteamRemoteStorage.FileForget(cloudFilename);
+                                    }
+                                    catch (Exception exception)
+                                    {
+                                        Logger.LogError(exception);
+                                    }
+                                }
+                            }
+                            OutputMessage("Delete file finished");
+                        });
                     }
                     GUILayout.BeginVertical();
                 }
@@ -154,12 +196,6 @@ public class ConfigCloudBackup : BaseUnityPlugin
                 OutputMessage("Enable cloud storage for account or game on Steam!");
                 SteamRemoteStorage.SetCloudEnabledForApp(true);
             }
-            callResult_Read = CallResult<RemoteStorageFileReadAsyncComplete_t>.Create(
-                new CallResult<RemoteStorageFileReadAsyncComplete_t>.APIDispatchDelegate(
-                    this.Event_OnReadAsyncComplete));
-            callResult_Write = CallResult<RemoteStorageFileWriteAsyncComplete_t>.Create(
-                new CallResult<RemoteStorageFileWriteAsyncComplete_t>.APIDispatchDelegate(
-                    this.Event_OnWriteComplete));
             Directory.CreateDirectory(HASH_GAME_CONFIG_PATH);
             Directory.CreateDirectory(HASH_GAME_CONFIG_BACKUP_PATH);
         }
@@ -183,42 +219,15 @@ public class ConfigCloudBackup : BaseUnityPlugin
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
     }
-    private void Update()
-    {
-        if (_hasCloudActionRunning
-            && !callResult_Read.IsActive()
-            && _processedFileCount < _totalFileCount
-            && _isReadORWriteOnceFinished)
-        {
-            Logger.LogInfo($"Continue invoke {(isReadyToUpload
-                ? "read" : "write")} index: " + _processedFileCount);
-            if (!isReadyToUpload)
-            {
-                Sub_ReadFileRelay(_processedFileCount);
-            }
-            else if (isReadyToUpload && !callResult_Write.IsActive())
-            {
-                Sub_WriteFileRelay(_processedFileCount);
-            }
-            _isReadORWriteOnceFinished = false;
-        }
-    }
+
+    /// <summary>
+    /// Show message to players on IMGUI and log it to log
+    /// </summary>
+    /// <param name="msg"></param>
     public void OutputMessage(string msg)
     {
         _uiOutputMessage = msg;
         Logger.LogInfo(msg);
-    }
-    private void ResetState()
-    {
-        _isActionConfirmed = false;
-        _nextActionAfterRead = NextActionAfterRead.Backup;
-        _hasCloudActionRunning = false;
-        _totalFileCount = 0;
-        _processedFileCount = 0;
-        _errorFileCount = 0;
-        _currentCloudFilename = "";
-        isReadyToUpload = false;
-        _isReadORWriteOnceFinished = false;
     }
 
     public void BackupLocal()
@@ -229,7 +238,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
         var timestampString = DateTime.Now
             .ToUniversalTime().ToString(HASH_TIME_FORMAT);
         Directory.CreateDirectory(Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
-            , $"LOCAL_{timestampString}"));
+            , $"{HASH_LOCAL}_{timestampString}"));
         foreach (var configFile in configDirectory.GetFiles())
         {
             try
@@ -249,199 +258,74 @@ public class ConfigCloudBackup : BaseUnityPlugin
         OutputMessage($"Local is backed up {(hasError ? "with error" : "")}");
     }
 
-    public string _timestampString;
-    public string _currentCloudFilename = "";
-    public void BackupCloud(NextActionAfterRead action)
+    public void DownloadFromCloud(bool isBackup)
     {
-        if (SteamRemoteStorage.GetFileCount() == 0
-            && action != NextActionAfterRead.Upload)
-        {
-            OutputMessage("No file is on cloud");
-            return;
-        }
-        if ((action == NextActionAfterRead.Delete
-            || action == NextActionAfterRead.Upload)
-            && !_isActionConfirmed)
-        {
-            OutputMessage("Action needs to be confirmed");
-            return;
-        }
-        ResetState();
-        _nextActionAfterRead = action;
-        Sub_ReadFileRelayStart();
-    }
-
-    private void Sub_ReadFileRelayStart()
-    {
-        _hasCloudActionRunning = true;
-        _timestampString = DateTime.Now
+        OutputMessage($"Start {(isBackup
+            ? "backing up" : "downloading from")} Cloud");
+        var timestampString = DateTime.Now
             .ToUniversalTime().ToString(HASH_TIME_FORMAT);
         Directory.CreateDirectory(Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
-            , $"{HASH_CLOUD}_{_timestampString}"));
-        _totalFileCount = SteamRemoteStorage.GetFileCount();
-        if (_processedFileCount < SteamRemoteStorage.GetFileCount())
+            , $"{HASH_CLOUD}_{timestampString}"));
+        for (int i = 0; i < SteamRemoteStorage.GetFileCount(); i++)
         {
-            Sub_ReadFileRelay(_processedFileCount);
-        }
-    }
-
-    private void Sub_ReadFileRelay(int index)
-    {
-        var filename = SteamRemoteStorage.GetFileNameAndSize(index, out var pnFileSizeInBytes);
-        var handle = SteamRemoteStorage.FileReadAsync(filename, 0, (uint)pnFileSizeInBytes);
-        callResult_Read.Set(handle, null);
-        Logger.LogInfo("Read cloud: " + filename);
-        _currentCloudFilename = filename;
-    }
-
-    public void Sub_WriteFileRelayStart()
-    {
-        isReadyToUpload = true;
-        var configDirectory = new DirectoryInfo(HASH_GAME_CONFIG_PATH);
-        _totalFileCount = configDirectory.GetFiles().Count();
-        _processedFileCount = 0;
-        try
-        {
-            Sub_WriteFileRelay(0);
-        }
-        catch (Exception exception)
-        {
-            _errorFileCount++;
-            Logger.LogError(exception);
-        }
-    }
-
-    private void Sub_WriteFileRelay(int index)
-    {
-        _hasCloudActionRunning = true;
-        var files = new DirectoryInfo(HASH_GAME_CONFIG_PATH).GetFiles();
-        if (index > files.Count() - 1)
-        {
-            Logger.LogInfo("Outbound index during writing");
-            return;
-        }
-        var file = files[index];
-        var fileData = new byte[file.Length];
-        var fileStream = file.OpenRead();
-        fileStream.Read(fileData, 0, (int)file.Length);
-        callResult_Write.Set(
-            SteamRemoteStorage.FileWriteAsync(file.Name, fileData, (uint)file.Length)
-            , null);
-        fileStream.Dispose();
-    }
-
-    /// <summary>
-    /// Callback to handle `BackupCloud()` and continue uploading to cloud 
-    /// </summary>
-    public void Event_OnReadAsyncComplete(RemoteStorageFileReadAsyncComplete_t pCallback
-        , bool bIOFailure)
-    {
-        Logger.LogInfo("OnReadComplete");
-        _processedFileCount++;
-        _isReadORWriteOnceFinished = true;
-        if (pCallback.m_eResult != EResult.k_EResultOK)
-        {
-            Logger.LogError("Read cloud failed: " + (int)pCallback.m_eResult);
-            _errorFileCount++;
-            return;
-        }
-        try
-        {
-            if (SteamRemoteStorage.FilePersisted(_currentCloudFilename))
+            var filename = SteamRemoteStorage
+                .GetFileNameAndSize(i, out var pnFileSizeInBytes);
+            if (SteamRemoteStorage.FilePersisted(filename))
             {
-                byte[] pvBuffer = new byte[pCallback.m_cubRead];
-                SteamRemoteStorage.FileReadAsyncComplete(pCallback.m_hFileReadAsync
-                    , pvBuffer, pCallback.m_cubRead);
-                string targetPath;
-                if (_nextActionAfterRead == NextActionAfterRead.Download)
-                    targetPath = Path.Combine(HASH_GAME_CONFIG_PATH
-                        , _currentCloudFilename);
-                else
-                    targetPath = Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
-                        , $"CLOUD_{_timestampString}"
-                        , _currentCloudFilename);
-
-                var file = File.Create(targetPath);
-                file.Write(pvBuffer, 0, (int)pCallback.m_cubRead);
-                file.Close();
-            }
-            else { Logger.LogInfo("File not persisted: " + _currentCloudFilename); }
-        }
-        catch (Exception exception)
-        {
-            Logger.LogError(exception);
-            _errorFileCount++;
-        }
-
-        // next action
-        if (_processedFileCount >= _totalFileCount)
-        {
-            OutputMessage("Read Cloud finished");
-            DirectoryInfo configDirectory;
-            if (_nextActionAfterRead == NextActionAfterRead.Delete)
-            {
-                configDirectory = new DirectoryInfo(HASH_GAME_CONFIG_PATH);
-                for (int i = 0; i < SteamRemoteStorage.GetFileCount(); i++)
+                Logger.LogInfo("Read cloud: " + filename);
+                byte[] pvBuffer = new byte[pnFileSizeInBytes];
+                try
                 {
-                    var cloudFilename = SteamRemoteStorage.GetFileNameAndSize(i, out _);
-                    var isFileExist = false;
-                    foreach (var localConfigFile in configDirectory.GetFiles())
-                    {
-                        if (localConfigFile.Name == cloudFilename)
-                        {
-                            isFileExist = true;
-                            break;
-                        }
-                    }
-                    if (!isFileExist)
-                    {
-                        Logger.LogInfo("Remove: " + cloudFilename);
-                        try
-                        {
-                            SteamRemoteStorage.FileForget(cloudFilename);
-                        }
-                        catch (Exception exception)
-                        {
-                            Logger.LogError(exception);
-                        }
-                    }
+                    SteamRemoteStorage.FileRead(filename, pvBuffer, pnFileSizeInBytes);
+                    string targetPath;
+                    if (isBackup)
+                        targetPath = Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
+                            , $"{HASH_CLOUD}_{timestampString}"
+                            , filename);
+                    else
+                        targetPath = Path.Combine(HASH_GAME_CONFIG_PATH
+                            , filename);
+                    var file = File.Create(targetPath);
+                    file.Write(pvBuffer, 0, pnFileSizeInBytes);
+                    file.Close();
                 }
-                OutputMessage("Delete file finished");
-                ResetState();
-                return;
+                catch (Exception exception)
+                {
+                    Logger.LogError(exception);
+                }
             }
-            else if (!(_nextActionAfterRead == NextActionAfterRead.Upload))
+            else
             {
-                ResetState();
-                return;
+                Logger.LogInfo("Read cancel cloud: " + filename);
             }
-            Sub_WriteFileRelayStart();
         }
+        OutputMessage("Action reading from cloud finished");
     }
 
-    public void UploadLocalConfigToCloud()
+    public void UploadToCloud()
     {
-        OutputMessage("Start upload Local to Cloud");
-        BackupCloud(NextActionAfterRead.Upload);
-    }
-
-    public void Event_OnWriteComplete(RemoteStorageFileWriteAsyncComplete_t pCallback
-        , bool bIOFailure)
-    {
-        Logger.LogInfo("OnWriteComplete");
-        _processedFileCount++;
-        _isReadORWriteOnceFinished = true;
-        if (pCallback.m_eResult != EResult.k_EResultOK)
+        OutputMessage($"Start uploading");
+        var configDirectory = new DirectoryInfo(HASH_GAME_CONFIG_PATH);
+        var hasError = false;
+        foreach (var file in configDirectory.GetFiles())
         {
-            Logger.LogError("Write cloud failed: " + (int)pCallback.m_eResult);
-            return;
+            Logger.LogInfo("Upload file:" + file.Name);
+            try
+            {
+                var fileData = new byte[file.Length];
+                var fileStream = file.OpenRead();
+                fileStream.Read(fileData, 0, (int)file.Length);
+                SteamRemoteStorage.FileWrite(file.Name, fileData, (int)file.Length);
+                fileStream.Dispose();
+            }
+            catch (Exception exception)
+            {
+                hasError = true;
+                Logger.LogError(exception);
+            }
         }
-        if (_processedFileCount >= _totalFileCount)
-        {
-            OutputMessage("Upload to Cloud finished (RECOMMENDED to check file list and cloud storage occupied amount at Steam if action succeeds)"
-                + (_errorFileCount > 0 ? "with error" : ""));
-            ResetState();
-        }
+        OutputMessage("Upload finished "
+            + (hasError ? "with error" : ""));
     }
 
     class ConfigurationManagerAttributes
@@ -465,9 +349,7 @@ public static class Patch
         {
             try
             {
-                ConfigCloudBackup.instance.isReadyToUpload = true;
-                ConfigCloudBackup.logger.LogInfo("Upload when start game");
-                ConfigCloudBackup.instance.Sub_WriteFileRelayStart();
+                ConfigCloudBackup.logger.LogInfo("Start uploading when start game");
             }
             catch (Exception exception)
             {
