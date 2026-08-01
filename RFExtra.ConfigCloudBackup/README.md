@@ -25,6 +25,10 @@ Toggles:
   - `Enable Auto Backup`
 
     Backup local configs to backup directory every week when launching game
+    
+  - `Backup Before Important Action`
+
+    Backup files to local backup directory before important actions which need confirm
 
 Actions:
 
@@ -48,10 +52,6 @@ Actions:
 
     Upload local files to cloud and backup cloud files first
 
-    Because of Steam, you may can only run this action once time every launching game, otherwise Steam will stick it
-
-    `Enable Auto Upload` can ingore this issue but will not backup cloud files before uploading
-
   - `DOWNLOAD`
 
     Download cloud files and overwrite local files(which will not delete local files not on cloud) and backup local files first
@@ -60,4 +60,4 @@ Actions:
 
     Delete cloud files which not exist on players' config directory, as a way to delete the files on cloud, in order to reduce accidental actions by players
 
-    The deleted files are still storaged by Steam client on local cache(`steam\userdata\*userid*\636480\remote`), but not reachable to players
+    The deleted files are still storaged by Steam client on local cache(`steam\userdata\*userid*\636480\remote`), but not reachable to players in game
