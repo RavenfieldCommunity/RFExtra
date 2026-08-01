@@ -65,6 +65,10 @@ public class ConfigCloudBackup : BaseUnityPlugin
         enableAutoBackup = Config.Bind("Config"
             , "Enable Auto Backup", false
             , "Auto backup local files to local backup directory weekly when launching game");
+        lastBackupTime = Config.Bind("Config"
+            , "lastBackupTime", ""
+            , new ConfigDescription(""
+                , tags: new ConfigurationManagerAttributes() { IsAdvanced = true }));
         // config ui
         Config.Bind<bool>("UI", "UI", true,
             new ConfigDescription("", null, new ConfigurationManagerAttributes()
@@ -172,6 +176,10 @@ public class ConfigCloudBackup : BaseUnityPlugin
             BackupLocal();
             lastBackupTime.Value = DateTime.Now.ToString();
         }
+        else
+        {
+            Logger.LogInfo("No startup backup");
+        }
         harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
         harmonyInstance.PatchAll(typeof(Patch));
     }
@@ -210,6 +218,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
         _errorFileCount = 0;
         _currentCloudFilename = "";
         isReadyToUpload = false;
+        _isReadORWriteOnceFinished = false;
     }
 
     public void BackupLocal()

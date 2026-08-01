@@ -1,6 +1,6 @@
 # RFExtra.ConfigCloudBackup
 
-A plugin to backup local game configuration(`.rgc`) to Steam cloud.
+A plugin to backup local game configuration(`.rgc` which is for team configs) to Steam cloud.
 
 # Installation 
 - Install BepInEx
@@ -13,6 +13,18 @@ Launch the game, then you can press `F1` or `Left alt`+`S`(default) to edit the 
 **REMEMBER:** This is only a tool, always backing up files on your own regularly! 
 
 Some actions need to toggle `COMFIRM ACTIONS?` to continue
+
+And every action will notice finish result, if not, probably Steam stuck the action
+
+Toggles:
+
+  - `Enable Auto Upload`
+
+    Upload configs to cloud when entering map
+
+  - `Enable Auto Backup`
+
+    Backup local configs to backup directory every week when launching game
 
 Actions:
 
@@ -35,6 +47,10 @@ Actions:
   - `UPLOAD`
 
     Upload local files to cloud and backup cloud files first
+
+    Because of Steam, you may can only run this action once time every launching game, otherwise Steam will stick it
+
+    `Enable Auto Upload` can ingore this issue but will not backup cloud files before uploading
 
   - `DOWNLOAD`
 

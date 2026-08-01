@@ -10,6 +10,10 @@ Here includes a collection of Ravenfield plugins for several features.
 - [RFExtra.TDFDView](RFExtra.TDFDView/README.md)
 
   A plugin to provide friendly orthographic vision in spectator mode.
+
+- [RFExtra.ConfigCloudBackup](RFExtra.ConfigCloudBackup/README.md)
+
+  A plugin to backup local game configuration(`.rgc` which is for team configs) to Steam cloud.
   
 ## Build 
 - Install [.Net SDK 9 or newer](https://dotnet.microsoft.com/) and [.Net Framework 4.6 Developer Pack](https://dotnet.microsoft.com/download/dotnet-framework/net462)
