@@ -9,6 +9,7 @@ using Steamworks;
 using UnityEngine;
 using System.Linq;
 using UnityEngine.XR;
+using BepInEx.Logging;
 
 namespace RFExtra.ConfigCloudBackup;
 
@@ -17,6 +18,7 @@ namespace RFExtra.ConfigCloudBackup;
 public class ConfigCloudBackup : BaseUnityPlugin
 {
     public static ConfigCloudBackup instance;
+    internal static ManualLogSource logger;
     public Harmony harmonyInstance;
     private string _uiOutputMessage;
     private bool _isActionConfirmed = false;
@@ -26,7 +28,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
     private bool _isReadORWriteOnceFinished = false;
     private int _errorFileCount = 0;
     private NextActionAfterRead _nextActionAfterRead = NextActionAfterRead.Backup;
-    private bool _isReadyToUpload = false;
+    public bool isReadyToUpload = false;
 
     public enum NextActionAfterRead
     {
@@ -50,9 +52,19 @@ public class ConfigCloudBackup : BaseUnityPlugin
     public const string HASH_CLOUD = "CLOUD";
     private CallResult<RemoteStorageFileReadAsyncComplete_t> callResult_Read;
     private CallResult<RemoteStorageFileWriteAsyncComplete_t> callResult_Write;
+    public ConfigEntry<string> lastBackupTime;
+    public ConfigEntry<bool> enableAutoUpload;
+    public ConfigEntry<bool> enableAutoBackup;
     private void Awake()
     {
         instance = this;
+        logger = Logger;
+        enableAutoUpload = Config.Bind("Config"
+            , "Enable Auto Upload", true
+            , "Auto upload local files to Cloud when entering map");
+        enableAutoBackup = Config.Bind("Config"
+            , "Enable Auto Backup", false
+            , "Auto backup local files to local backup directory weekly when launching game");
         // config ui
         Config.Bind<bool>("UI", "UI", true,
             new ConfigDescription("", null, new ConfigurationManagerAttributes()
@@ -149,6 +161,20 @@ public class ConfigCloudBackup : BaseUnityPlugin
         }
     }
 
+    private void Start()
+    {
+        if (enableAutoBackup.Value
+            && (lastBackupTime.Value == ""
+            || DateTime.Now - DateTime.Parse(lastBackupTime.Value)
+                > new TimeSpan(7, 0, 0, 0)))
+        {
+            Logger.LogInfo("Time for backing up local");
+            BackupLocal();
+            lastBackupTime.Value = DateTime.Now.ToString();
+        }
+        harmonyInstance = new Harmony(MyPluginInfo.PLUGIN_GUID);
+        harmonyInstance.PatchAll(typeof(Patch));
+    }
     private void Update()
     {
         if (_hasCloudActionRunning
@@ -156,13 +182,13 @@ public class ConfigCloudBackup : BaseUnityPlugin
             && _processedFileCount < _totalFileCount
             && _isReadORWriteOnceFinished)
         {
-            Logger.LogInfo($"Continue invoke {(_isReadyToUpload
+            Logger.LogInfo($"Continue invoke {(isReadyToUpload
                 ? "read" : "write")} index: " + _processedFileCount);
-            if (!_isReadyToUpload)
+            if (!isReadyToUpload)
             {
                 Sub_ReadFileRelay(_processedFileCount);
             }
-            else if (_isReadyToUpload && !callResult_Write.IsActive())
+            else if (isReadyToUpload && !callResult_Write.IsActive())
             {
                 Sub_WriteFileRelay(_processedFileCount);
             }
@@ -183,7 +209,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
         _processedFileCount = 0;
         _errorFileCount = 0;
         _currentCloudFilename = "";
-        _isReadyToUpload = false;
+        isReadyToUpload = false;
     }
 
     public void BackupLocal()
@@ -259,8 +285,26 @@ public class ConfigCloudBackup : BaseUnityPlugin
         _currentCloudFilename = filename;
     }
 
+    public void Sub_WriteFileRelayStart()
+    {
+        isReadyToUpload = true;
+        var configDirectory = new DirectoryInfo(HASH_GAME_CONFIG_PATH);
+        _totalFileCount = configDirectory.GetFiles().Count();
+        _processedFileCount = 0;
+        try
+        {
+            Sub_WriteFileRelay(0);
+        }
+        catch (Exception exception)
+        {
+            _errorFileCount++;
+            Logger.LogError(exception);
+        }
+    }
+
     private void Sub_WriteFileRelay(int index)
     {
+        _hasCloudActionRunning = true;
         var files = new DirectoryInfo(HASH_GAME_CONFIG_PATH).GetFiles();
         if (index > files.Count() - 1)
         {
@@ -294,21 +338,25 @@ public class ConfigCloudBackup : BaseUnityPlugin
         }
         try
         {
-            byte[] pvBuffer = new byte[pCallback.m_cubRead];
-            SteamRemoteStorage.FileReadAsyncComplete(pCallback.m_hFileReadAsync
-                , pvBuffer, pCallback.m_cubRead);
-            string targetPath;
-            if (_nextActionAfterRead == NextActionAfterRead.Download)
-                targetPath = Path.Combine(HASH_GAME_CONFIG_PATH
-                    , _currentCloudFilename);
-            else
-                targetPath = Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
-                    , $"CLOUD_{_timestampString}"
-                    , _currentCloudFilename);
+            if (SteamRemoteStorage.FilePersisted(_currentCloudFilename))
+            {
+                byte[] pvBuffer = new byte[pCallback.m_cubRead];
+                SteamRemoteStorage.FileReadAsyncComplete(pCallback.m_hFileReadAsync
+                    , pvBuffer, pCallback.m_cubRead);
+                string targetPath;
+                if (_nextActionAfterRead == NextActionAfterRead.Download)
+                    targetPath = Path.Combine(HASH_GAME_CONFIG_PATH
+                        , _currentCloudFilename);
+                else
+                    targetPath = Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
+                        , $"CLOUD_{_timestampString}"
+                        , _currentCloudFilename);
 
-            var file = File.Create(targetPath);
-            file.Write(pvBuffer, 0, (int)pCallback.m_cubRead);
-            file.Close();
+                var file = File.Create(targetPath);
+                file.Write(pvBuffer, 0, (int)pCallback.m_cubRead);
+                file.Close();
+            }
+            else { Logger.LogInfo("File not persisted: " + _currentCloudFilename); }
         }
         catch (Exception exception)
         {
@@ -358,19 +406,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
                 ResetState();
                 return;
             }
-            _isReadyToUpload = true;
-            configDirectory = new DirectoryInfo(HASH_GAME_CONFIG_PATH);
-            _totalFileCount = configDirectory.GetFiles().Count();
-            _processedFileCount = 0;
-            try
-            {
-                Sub_WriteFileRelay(0);
-            }
-            catch (Exception exception)
-            {
-                _errorFileCount++;
-                Logger.LogError(exception);
-            }
+            Sub_WriteFileRelayStart();
         }
     }
 
@@ -393,7 +429,8 @@ public class ConfigCloudBackup : BaseUnityPlugin
         }
         if (_processedFileCount >= _totalFileCount)
         {
-            OutputMessage("Upload to Cloud finished (RECOMMENDED to check file list and cloud storage occupied amount at Steam if action succeeds)" + (_errorFileCount > 0 ? "with error" : ""));
+            OutputMessage("Upload to Cloud finished (RECOMMENDED to check file list and cloud storage occupied amount at Steam if action succeeds)"
+                + (_errorFileCount > 0 ? "with error" : ""));
             ResetState();
         }
     }
@@ -401,6 +438,32 @@ public class ConfigCloudBackup : BaseUnityPlugin
     class ConfigurationManagerAttributes
     {
         public Action<object> CustomDrawer;
+
+        public bool IsAdvanced = false;
     }
 
+}
+
+[HarmonyPatch]
+public static class Patch
+{
+    [HarmonyPatch(typeof(InstantActionConfigMenu)
+        , nameof(InstantActionConfigMenu.StartGame))]
+    [HarmonyPostfix]
+    public static void InstantActionConfigMenu_StartGame()
+    {
+        if (ConfigCloudBackup.instance.enableAutoUpload.Value)
+        {
+            try
+            {
+                ConfigCloudBackup.instance.isReadyToUpload = true;
+                ConfigCloudBackup.logger.LogInfo("Upload when start game");
+                ConfigCloudBackup.instance.Sub_WriteFileRelayStart();
+            }
+            catch (Exception exception)
+            {
+                ConfigCloudBackup.logger.LogError(exception);
+            }
+        }
+    }
 }
