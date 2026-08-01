@@ -13,6 +13,7 @@ using UnityEngine.XR;
 namespace RFExtra.ConfigCloudBackup;
 
 [BepInPlugin(MyPluginInfo.PLUGIN_GUID, MyPluginInfo.PLUGIN_NAME, MyPluginInfo.PLUGIN_VERSION)]
+[BepInDependency("com.bepis.bepinex.configurationmanager", BepInDependency.DependencyFlags.HardDependency)]
 public class ConfigCloudBackup : BaseUnityPlugin
 {
     public static ConfigCloudBackup instance;
@@ -22,8 +23,8 @@ public class ConfigCloudBackup : BaseUnityPlugin
     private bool _hasCloudActionRunning = false;
     private int _totalFileCount = 0;
     private int _processedFileCount = 0;
+    private bool _isReadORWriteOnceFinished = false;
     private int _errorFileCount = 0;
-    private int _currentFileIndex = 0;
     private NextActionAfterRead _nextActionAfterRead = NextActionAfterRead.Backup;
     private bool _isReadyToUpload = false;
 
@@ -79,9 +80,10 @@ public class ConfigCloudBackup : BaseUnityPlugin
                         {
                             var configFilename = SteamRemoteStorage
                             .GetFileNameAndSize(i, out var pnFileSizeInBytes);
-                            writer.WriteLine(configFilename + " ~"
-                                + (pnFileSizeInBytes / 1024).ToString("F2")
-                                + "KB");
+                            if (SteamRemoteStorage.FilePersisted(configFilename))
+                                writer.WriteLine(configFilename + " ~"
+                                    + (pnFileSizeInBytes / 1024).ToString("F2")
+                                    + "KB");
                         }
                         writer.Close();
                         Process.Start(listFilePath);
@@ -104,6 +106,12 @@ public class ConfigCloudBackup : BaseUnityPlugin
                     else if (GUILayout.Button("DOWNLOAD: Cloud to Local")
                         && !_hasCloudActionRunning)
                     {
+                        if (!_isActionConfirmed)
+                        {
+                            OutputMessage("Action needs to be confirmed");
+                            return;
+                        }
+                        _isActionConfirmed = false;
                         BackupLocal();
                         _nextActionAfterRead = NextActionAfterRead.Download;
                         Sub_ReadFileRelayStart();
@@ -146,19 +154,19 @@ public class ConfigCloudBackup : BaseUnityPlugin
         if (_hasCloudActionRunning
             && !callResult_Read.IsActive()
             && _processedFileCount < _totalFileCount
-            )
+            && _isReadORWriteOnceFinished)
         {
-            _currentFileIndex++;
+            Logger.LogInfo($"Continue invoke {(_isReadyToUpload
+                ? "read" : "write")} index: " + _processedFileCount);
             if (!_isReadyToUpload)
             {
-                Logger.LogInfo("Continue invoke read index++: " + _currentFileIndex);
-                Sub_ReadFileRelay(_currentFileIndex);
+                Sub_ReadFileRelay(_processedFileCount);
             }
             else if (_isReadyToUpload && !callResult_Write.IsActive())
             {
-                Logger.LogInfo("Continue invoke write index++: " + _currentFileIndex);
-                Sub_WriteFileRelay(_currentFileIndex);
+                Sub_WriteFileRelay(_processedFileCount);
             }
+            _isReadORWriteOnceFinished = false;
         }
     }
     public void OutputMessage(string msg)
@@ -173,7 +181,6 @@ public class ConfigCloudBackup : BaseUnityPlugin
         _hasCloudActionRunning = false;
         _totalFileCount = 0;
         _processedFileCount = 0;
-        _currentFileIndex = 0;
         _errorFileCount = 0;
         _currentCloudFilename = "";
         _isReadyToUpload = false;
@@ -237,9 +244,9 @@ public class ConfigCloudBackup : BaseUnityPlugin
         Directory.CreateDirectory(Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
             , $"{HASH_CLOUD}_{_timestampString}"));
         _totalFileCount = SteamRemoteStorage.GetFileCount();
-        if (_currentFileIndex < SteamRemoteStorage.GetFileCount())
+        if (_processedFileCount < SteamRemoteStorage.GetFileCount())
         {
-            Sub_ReadFileRelay(_currentFileIndex);
+            Sub_ReadFileRelay(_processedFileCount);
         }
     }
 
@@ -278,6 +285,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
     {
         Logger.LogInfo("OnReadComplete");
         _processedFileCount++;
+        _isReadORWriteOnceFinished = true;
         if (pCallback.m_eResult != EResult.k_EResultOK)
         {
             Logger.LogError("Read cloud failed: " + (int)pCallback.m_eResult);
@@ -291,7 +299,8 @@ public class ConfigCloudBackup : BaseUnityPlugin
                 , pvBuffer, pCallback.m_cubRead);
             string targetPath;
             if (_nextActionAfterRead == NextActionAfterRead.Download)
-                targetPath = HASH_GAME_CONFIG_PATH;
+                targetPath = Path.Combine(HASH_GAME_CONFIG_PATH
+                    , _currentCloudFilename);
             else
                 targetPath = Path.Combine(HASH_GAME_CONFIG_BACKUP_PATH
                     , $"CLOUD_{_timestampString}"
@@ -310,7 +319,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
         // next action
         if (_processedFileCount >= _totalFileCount)
         {
-            OutputMessage("Backup Cloud finished");
+            OutputMessage("Read Cloud finished");
             DirectoryInfo configDirectory;
             if (_nextActionAfterRead == NextActionAfterRead.Delete)
             {
@@ -330,7 +339,14 @@ public class ConfigCloudBackup : BaseUnityPlugin
                     if (!isFileExist)
                     {
                         Logger.LogInfo("Remove: " + cloudFilename);
-                        SteamRemoteStorage.FileForget(cloudFilename);
+                        try
+                        {
+                            SteamRemoteStorage.FileForget(cloudFilename);
+                        }
+                        catch (Exception exception)
+                        {
+                            Logger.LogError(exception);
+                        }
                     }
                 }
                 OutputMessage("Delete file finished");
@@ -369,6 +385,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
     {
         Logger.LogInfo("OnWriteComplete");
         _processedFileCount++;
+        _isReadORWriteOnceFinished = true;
         if (pCallback.m_eResult != EResult.k_EResultOK)
         {
             Logger.LogError("Write cloud failed: " + (int)pCallback.m_eResult);
@@ -376,7 +393,7 @@ public class ConfigCloudBackup : BaseUnityPlugin
         }
         if (_processedFileCount >= _totalFileCount)
         {
-            OutputMessage("Upload to Cloud finished (RECOMMENDED TO CHECK FILE LIST AND CLOUD STORAGE AMOUNT TO CHECK IF SUCCEEDS)" + (_errorFileCount > 0 ? "with error" : ""));
+            OutputMessage("Upload to Cloud finished (RECOMMENDED to check file list and cloud storage occupied amount at Steam if action succeeds)" + (_errorFileCount > 0 ? "with error" : ""));
             ResetState();
         }
     }
