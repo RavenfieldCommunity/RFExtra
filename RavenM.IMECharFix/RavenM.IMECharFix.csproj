@@ -5,6 +5,7 @@
     <Version>1.0.0</Version>
     <AssemblyName>RavenM.IMECharFix</AssemblyName>
     <LangVersion>latest</LangVersion>
+    <OutputPath>D:\Program Files\pip3.7\steamapps\common\Ravenfield\BepInEx\plugins\net46</OutputPath>
   </PropertyGroup>
 
   <ItemGroup>

@@ -32,20 +32,21 @@ public class IMECharFix : BaseUnityPlugin
     public ConfigEntry<float> fieldScale;
     public ConfigEntry<KeyboardShortcut> globalChatKeybind;
     public ConfigEntry<KeyboardShortcut> teamChatKeybind;
+    internal AssetBundle uiBundle;
+    internal GameObject uiObjectInstance;
+    internal InputField uiInputField;
+    internal Text uiIndicatorText;
+    internal Vector3 originalFieldPosX;
     // runtime var and not for outside ref
     private bool _isInited = false;
     private bool _showField = false;
     private bool _isGlobalMessage = false;
     private bool _isCNPlayer = false;
-    internal AssetBundle uiBundle;
     private AssetBundleCreateRequest _uiBundleLoader;
-    internal GameObject uiObjectInstance;
-    internal InputField uiInputField;
-    internal Text uiIndicatorText;
     private readonly KeyboardShortcut escKeybind = new KeyboardShortcut(KeyCode.Escape);
     private readonly KeyboardShortcut enterKeybind = new KeyboardShortcut(KeyCode.Return);
-    private readonly KeyboardShortcut leftCtrlEnterKeybind = new KeyboardShortcut(KeyCode.Return,[KeyCode.LeftControl]);
-    private readonly KeyboardShortcut rightCtrlEnterKeybind = new KeyboardShortcut(KeyCode.Return,[KeyCode.RightControl]);
+    private readonly KeyboardShortcut leftCtrlEnterKeybind = new KeyboardShortcut(KeyCode.Return, [KeyCode.LeftControl]);
+    private readonly KeyboardShortcut rightCtrlEnterKeybind = new KeyboardShortcut(KeyCode.Return, [KeyCode.RightControl]);
     private void Start()
     {
         instance = this;
@@ -64,11 +65,21 @@ public class IMECharFix : BaseUnityPlugin
         globalChatKeybind = Config.Bind("Config",
             "Global Chat Keybind",
             new KeyboardShortcut(KeyCode.Y),
-            _isCNPlayer ? "全局消息按键" : "");
+            _isCNPlayer ? "全局消息按键，若冲突请更换" : "");
         teamChatKeybind = Config.Bind("Config",
             "Team Chat Keybind",
             new KeyboardShortcut(KeyCode.U),
-            _isCNPlayer ? "队伍消息按键" : "");
+            _isCNPlayer ? "队伍消息按键，若冲突请更换" : "");
+        fieldPosY = Config.Bind("Config",
+            "Input Field Position Y",
+            0,
+            _isCNPlayer ? "输入框纵向位置偏差（可负值）" : "");
+        selfEnabled.SettingChanged += (a, b) =>
+            {
+                if (uiInputField != null && uiInputField.enabled
+                    && !selfEnabled.Value)
+                    uiInputField.enabled = false;
+            };
         // res
         var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(
             Assembly.GetExecutingAssembly().GetManifestResourceNames()[0]);
@@ -85,43 +96,51 @@ public class IMECharFix : BaseUnityPlugin
 
     private void Update()
     {
-        if (_isInited
-            && LobbySystem.instance != null
-            && LobbySystem.instance.InLobby == true
-            && selfEnabled.Value
-            && uiInputField != null)
+        if (!_isInited
+            || LobbySystem.instance == null
+            || uiInputField == null)
+            return;
+        if (uiObjectInstance.gameObject.activeSelf != _showField )
+            uiObjectInstance.gameObject.SetActive(selfEnabled.Value ? _showField : false);
+        if (selfEnabled.Value)
         {
             ChatManager.instance.TypeIntention = false;
             ChatManager.instance.JustFocused = false;
 
-            if (teamChatKeybind.Value.IsDown()
-                || globalChatKeybind.Value.IsDown()
-                )
+            if (globalChatKeybind.Value.IsDown()
+                || teamChatKeybind.Value.IsDown())
             {
                 if (_showField)
-                    Event.current.Use();
-                IMECharFix.logger.LogDebug("Chat keybind pressed");
+                {
+                    return;
+                }
                 _showField = true;
                 _isGlobalMessage = globalChatKeybind.Value.IsDown();
+                Input.ResetInputAxes();
             }
-
-            if (uiInputField.gameObject.activeSelf != _showField)
-                uiInputField.gameObject.SetActive(_showField);
 
             if (_showField)
             {
+                uiInputField.transform.localPosition = originalFieldPosX
+                    + new Vector3(0, fieldPosY.Value, 0);
                 uiInputField.Select();
+                uiInputField.ActivateInputField();
                 uiIndicatorText.text = _isGlobalMessage ?
                     (_isCNPlayer ? "全局" : "GLOBAL")
                     : (_isCNPlayer ? "队伍" : "TEAM");
             }
 
-            if (escKeybind.IsDown())
+            if (_showField && escKeybind.IsDown())
+            {
                 _showField = false;
-            if (ctrlEnterToSend.Value ? leftCtrlEnterKeybind.IsDown() || rightCtrlEnterKeybind.IsDown()
+                uiInputField.text = "";
+                Input.ResetInputAxes();
+            }
+            if (_showField && ctrlEnterToSend.Value ? leftCtrlEnterKeybind.IsDown() || rightCtrlEnterKeybind.IsDown()
                 : enterKeybind.IsDown())
             {
                 _showField = false;
+                Input.ResetInputAxes();
                 // from ravenm lol
                 if (!string.IsNullOrEmpty(uiInputField.text))
                 {
@@ -163,7 +182,6 @@ public class IMECharFix : BaseUnityPlugin
                     }
                 }
                 uiInputField.text = "";
-                LoadoutUi.Hide();
             }
         }
     }
@@ -185,9 +203,10 @@ public static class Patch
                     IMECharFix.instance.uiBundle.LoadAsset(
                         IMECharFix.instance.uiBundle.GetAllAssetNames()[0])) as GameObject;
                 GameObject.DontDestroyOnLoad(IMECharFix.instance.uiObjectInstance);
-                IMECharFix.instance.uiObjectInstance.layer = 10;
+                IMECharFix.instance.uiObjectInstance.gameObject.GetComponent<Canvas>().sortingOrder = 10;
                 IMECharFix.instance.uiInputField =
                     IMECharFix.instance.uiObjectInstance.GetComponentInChildren<InputField>();
+                IMECharFix.instance.originalFieldPosX = IMECharFix.instance.uiInputField.transform.localPosition;
                 IMECharFix.instance.uiInputField.gameObject.SetActive(false);
                 foreach (var text in IMECharFix.instance.uiInputField.gameObject.GetComponentsInChildren<Text>())
                 {
@@ -200,5 +219,15 @@ public static class Patch
         {
             IMECharFix.logger.LogError(exception);
         }
+    }
+
+    [HarmonyPatch(typeof(ChatManager), nameof(ChatManager.InitializeChatArea))]
+    [HarmonyPrefix]
+    public static bool ChatManager_InitializeChatArea()
+    {
+        if (IMECharFix.instance.selfEnabled.Value)
+            return false;
+        else
+            return true;
     }
 }
